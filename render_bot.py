@@ -4,7 +4,7 @@ import time
 import threading
 import requests
 import telebot
-import html  # ✅ Added for safe HTML formatting
+import html  # 💡 Added: Required to safely format tables and code blocks in Telegram
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ─────────────────────────────
@@ -139,11 +139,11 @@ def call_hf_health() -> dict:
 
 
 # ─────────────────────────────
-# RESULT FORMATTER (Beautiful & Structural)
+# RESULT FORMATTER
 # ─────────────────────────────
 
 def format_result(data: dict) -> str:
-    # ✅ Updated: Escape HTML and format errors cleanly
+    # 💡 Updated: Beautiful HTML formatting added here
     if "error" in data and not data.get("sql") and not data.get("results"):
         return (
             f"❌ <b>{html.escape(data['error'])}</b>\n\n"
@@ -156,19 +156,15 @@ def format_result(data: dict) -> str:
     sql     = data.get("sql", "")
     results = data.get("results", [])
 
-    # ✅ Updated: Wrap SQL in <code> tags for copy-paste format
-    sql_block = f"🔍 <b>SQL:</b>\n<code>{html.escape(sql)}</code>"
-
     if isinstance(results, list) and results and "error" in results[0]:
         return (
-            f"❌ <b>SQL Error:</b>\n<code>{html.escape(results[0]['error'])}</code>\n\n"
-            f"{sql_block}"
+            f"❌ <b>SQL Error:</b>\n<pre>{html.escape(results[0]['error'])}</pre>\n\n"
+            f"<b>SQL attempted:</b>\n<code>{html.escape(sql)}</code>"
         )
 
     if not results:
-        return f"{sql_block}\n\n📭 <b>No records found.</b>"
+        return f"🔍 <b>SQL Query:</b>\n<code>{html.escape(sql)}</code>\n\n📭 <i>No records found.</i>"
 
-    # ── Copy-paste friendly plain table ──────────────────
     cols   = list(results[0].keys())
     rows   = results[:15]
 
@@ -177,7 +173,6 @@ def format_result(data: dict) -> str:
         for c in cols
     }
 
-    # ✅ Updated: Escape strings so characters like '<' or '&' don't crash Telegram
     header  = " | ".join(html.escape(str(c)).ljust(widths[c]) for c in cols)
     divider = "-+-".join("-" * widths[c] for c in cols)
     body    = "\n".join(
@@ -190,11 +185,10 @@ def format_result(data: dict) -> str:
         if len(results) > 15 else ""
     )
 
-    # ✅ Updated: Wrap the table in <pre> tags for perfect structural alignment on all devices
     return (
-        f"{sql_block}\n\n"
-        f"📊 <b>Results ({len(results)} row{'s' if len(results) != 1 else ''}):</b>\n"
-        f"<pre>{header}\n{divider}\n{body}</pre>{extra}"
+        f"🔍 <b>SQL Query:</b>\n<code>{html.escape(sql)}</code>\n\n"
+        f"📊 <b>Results ({len(results)} rows):</b>\n"
+        f"<pre>{header}\n{divider}\n{body}{extra}</pre>"
     )
 
 
@@ -218,10 +212,7 @@ def welcome(message):
         "• Show first 5 rows\n"
         "• Count total records\n"
         "• Show unique values in column_name\n"
-        "• Group by column_name and count\n"
-        "• Average of column_name\n"
-        "• Sort by column_name descending limit 10\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "• Group by column_name and count\n\n"
         "Commands:\n"
         "/upload — get upload link\n"
         "/status — check API health\n"
@@ -272,13 +263,9 @@ def help_cmd(message):
         "/upload — Get your CSV upload link\n"
         "/status — Check if HF API is online\n"
         "/help   — This message\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━\n"
         "How to use:\n"
         f"1. Upload CSV: {upload_link}\n"
-        "2. Ask any question in plain English\n"
-        "3. Bot returns SQL + copy-paste table\n\n"
-        "If bot is slow — HF Space may be waking up.\n"
-        "Wait 30s and retry."
+        "2. Ask any question in plain English"
     )
 
 
@@ -309,7 +296,7 @@ def handle_query(message):
     except Exception:
         pass
 
-    # ✅ Updated: Added parse_mode="HTML" so Telegram properly formats the code and pre tags
+    # 💡 Updated: Added parse_mode="HTML" so Telegram renders the structure perfectly
     bot.send_message(chat_id, result, parse_mode="HTML")
 
 
