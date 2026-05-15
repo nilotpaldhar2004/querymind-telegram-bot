@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import requests
 import telebot
@@ -10,6 +11,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").rstrip("/")
+RENDER_URL   = os.getenv("RENDER_URL", "").rstrip("/")  # optional self-ping
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN environment variable not set")
@@ -37,6 +39,23 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     print(f"✅ Health server running on port {port}")
     server.serve_forever()
+
+
+# ─────────────────────────────
+# SELF-PING (backup keep-alive)
+# ─────────────────────────────
+
+def keep_alive():
+    if not RENDER_URL:
+        print("⚠️ RENDER_URL not set — self-ping disabled")
+        return
+    while True:
+        time.sleep(600)  # every 10 minutes
+        try:
+            requests.get(f"{RENDER_URL}/", timeout=10)
+            print("✅ Self-ping sent")
+        except Exception as e:
+            print(f"⚠️ Self-ping failed: {e}")
 
 
 # ─────────────────────────────
@@ -189,6 +208,9 @@ def handle_query(message):
 if __name__ == "__main__":
     # Start health server in background thread
     threading.Thread(target=run_health_server, daemon=True).start()
+
+    # Start self-ping keep-alive (backup for UptimeRobot)
+    threading.Thread(target=keep_alive, daemon=True).start()
 
     print("✅ render_bot.py started — polling Telegram...")
     print(f"🌐 HF Space: {HF_SPACE_URL}")
