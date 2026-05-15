@@ -56,7 +56,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """
-        Receives notifications from Hugging Face app.py
+        Catches automated upload triggers from Hugging Face app.py
         to bypass HF's outbound SSL handshake restrictions.
         """
         if self.path == "/notify-upload":
@@ -69,16 +69,16 @@ class HealthHandler(BaseHTTPRequestHandler):
                 text = payload.get("text")
                 
                 if chat_id and text:
-                    # Render handles the Telegram connection perfectly
+                    # Render sends the actual message using its stable connection
                     bot.send_message(chat_id, text, parse_mode="HTML")
-                    print(f"🔔 Notification forwarded to Chat ID: {chat_id}")
+                    print(f"🔔 Signal from HF: Notification sent to {chat_id}")
                 
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'{"status": "delivered"}')
                 return
             except Exception as e:
-                print(f"❌ Error processing notification: {e}")
+                print(f"❌ Proxy Notification Error: {e}")
                 
         self.send_response(400)
         self.end_headers()
@@ -225,7 +225,8 @@ def send_upload_link(message):
     bot.send_message(
         chat_id,
         f"📂 Upload your CSV here:\n{upload_link}\n\n"
-        f"After upload, you will receive a confirmation here automatically."
+        f"After upload, you will receive a confirmation here automatically.\n"
+        f"Then ask your questions in plain English."
     )
 
 
@@ -277,7 +278,9 @@ def handle_query(message):
             chat_id,
             f"👋 Hello! I am QueryMind — your AI CSV analyst.\n\n"
             f"📂 Upload your CSV:\n{upload_link}\n\n"
-            f"Then ask me anything!"
+            f"Then ask me anything like:\n"
+            f"• Show first 5 rows\n"
+            f"• Count total records"
         )
         return
 
@@ -299,7 +302,10 @@ def handle_query(message):
 # ─────────────────────────────
 
 if __name__ == "__main__":
+    # Start the Health + Notification server
     threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # Start the Self-Ping task
     threading.Thread(target=keep_alive, daemon=True).start()
 
     print("✅ render_bot.py started — polling Telegram...")
