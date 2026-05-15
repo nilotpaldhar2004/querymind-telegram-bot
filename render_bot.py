@@ -4,6 +4,7 @@ import time
 import threading
 import requests
 import telebot
+import html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ─────────────────────────────
@@ -139,54 +140,67 @@ def call_hf_health() -> dict:
 
 # ─────────────────────────────
 # RESULT FORMATTER
+# Improved Beautiful & Structural Formatting
 # ─────────────────────────────
 
 def format_result(data: dict) -> str:
     if "error" in data and not data.get("sql") and not data.get("results"):
         return (
-            f"❌ {data['error']}\n\n"
+            f"❌ <b>Error:</b> {html.escape(data['error'])}\n\n"
             f"Possible reasons:\n"
-            f"• No CSV uploaded yet — send /upload for the link\n"
-            f"• AI rate limit hit — wait 60s and retry\n"
-            f"• HF Space is waking up — retry in 30s"
+            f"• No CSV uploaded yet — visit web app\n"
+            f"• AI rate limit hit — wait 60s\n"
+            f"• HF Space waking up — retry in 30s"
         )
 
     sql     = data.get("sql", "")
     results = data.get("results", [])
 
+    # Format the SQL block nicely
+    sql_block = f"🔍 <b>Generated SQL:</b>\n<code>{html.escape(sql)}</code>"
+
     if isinstance(results, list) and results and "error" in results[0]:
         return (
-            f"❌ SQL Error:\n{results[0]['error']}\n\n"
-            f"SQL attempted:\n{sql}"
+            f"❌ <b>SQL Execution Error:</b>\n"
+            f"<code>{html.escape(results[0]['error'])}</code>\n\n"
+            f"{sql_block}"
         )
 
     if not results:
-        return f"SQL:\n{sql}\n\nNo records found."
+        return f"{sql_block}\n\n📭 <b>No records found.</b>"
 
-    cols   = list(results[0].keys())
-    rows   = results[:15]
+    # ── Structural Table Construction ──────────────────
+    cols = list(results[0].keys())
+    # Limit rows for Telegram display
+    display_rows = results[:10]
 
-    widths = {
-        c: max(len(str(c)), max(len(str(r.get(c, ""))) for r in rows))
-        for c in cols
-    }
+    # Calculate widths
+    widths = {}
+    for c in cols:
+        val_lens = [len(str(r.get(c, ""))) for r in display_rows]
+        widths[c] = max(len(str(c)), max(val_lens) if val_lens else 0)
 
-    header  = " | ".join(str(c).ljust(widths[c]) for c in cols)
+    # Build the ASCII table
+    # Header
+    header = " | ".join(html.escape(str(c)).upper().ljust(widths[c]) for c in cols)
+    # Divider
     divider = "-+-".join("-" * widths[c] for c in cols)
-    body    = "\n".join(
-        " | ".join(str(row.get(c, "")).ljust(widths[c]) for c in cols)
-        for row in rows
-    )
+    
+    # Body
+    body_lines = []
+    for row in display_rows:
+        line = " | ".join(html.escape(str(row.get(c, ""))).ljust(widths[c]) for c in cols)
+        body_lines.append(line)
+    body = "\n".join(body_lines)
 
-    extra = (
-        f"\n... and {len(results) - 15} more rows."
-        if len(results) > 15 else ""
-    )
+    footer = ""
+    if len(results) > 10:
+        footer = f"\n\n<i>... and {len(results) - 10} more rows.</i>"
 
     return (
-        f"SQL:\n{sql}\n\n"
-        f"Results ({len(results)} rows):\n\n"
-        f"{header}\n{divider}\n{body}{extra}"
+        f"{sql_block}\n\n"
+        f"📊 <b>Results ({len(results)} rows):</b>\n"
+        f"<pre>{header}\n{divider}\n{body}</pre>{footer}"
     )
 
 
@@ -200,21 +214,21 @@ def welcome(message):
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
-        "⚡ Welcome to QueryMind — AI CSV Analyst\n"
+        "⚡ <b>Welcome to QueryMind — AI CSV Analyst</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📂 STEP 1 — Upload your CSV here:\n{upload_link}\n\n"
+        f"📂 <b>STEP 1</b> — Upload your CSV here:\n{upload_link}\n\n"
         "After upload you will get a confirmation here automatically.\n\n"
-        "💬 STEP 2 — Ask questions in plain English.\n\n"
+        "💬 <b>STEP 2</b> — Ask questions in plain English.\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📋 Example questions:\n\n"
+        "📋 <b>Example questions:</b>\n\n"
         "• Show first 5 rows\n"
         "• Count total records\n"
-        "• Show unique values in column_name\n"
-        "• Group by column_name and count\n\n"
-        "Commands:\n"
+        "• Average of column_name\n\n"
+        "<b>Commands:</b>\n"
         "/upload — get upload link\n"
         "/status — check API health\n"
-        "/help   — all commands"
+        "/help   — all commands",
+        parse_mode="HTML"
     )
 
 
@@ -224,9 +238,9 @@ def send_upload_link(message):
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
-        f"📂 Upload your CSV here:\n{upload_link}\n\n"
-        f"After upload, you will receive a confirmation here automatically.\n"
-        f"Then ask your questions in plain English."
+        f"📂 <b>Upload your CSV here:</b>\n{upload_link}\n\n"
+        f"After upload, you will receive a confirmation here automatically.",
+        parse_mode="HTML"
     )
 
 
@@ -238,14 +252,16 @@ def status(message):
     if "error" in data:
         bot.send_message(
             message.chat.id,
-            f"❌ HF API unreachable\n\nError: {data['error']}"
+            f"❌ <b>HF API unreachable</b>\n\nError: <code>{html.escape(data['error'])}</code>",
+            parse_mode="HTML"
         )
     else:
         bot.send_message(
             message.chat.id,
-            f"✅ HF API: online\n"
+            f"✅ <b>HF API: online</b>\n"
             f"🤖 Model: {data.get('model', 'unknown')}\n"
-            f"🔧 Service: {data.get('service', 'unknown')}"
+            f"🔧 Service: {data.get('service', 'unknown')}",
+            parse_mode="HTML"
         )
 
 
@@ -255,15 +271,16 @@ def help_cmd(message):
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
-        "🆘 Help — QueryMind Bot\n"
+        "🆘 <b>Help — QueryMind Bot</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "/start  — Welcome message\n"
         "/upload — Get your CSV upload link\n"
         "/status — Check if HF API is online\n"
         "/help   — This message\n\n"
-        "How to use:\n"
+        "<b>How to use:</b>\n"
         f"1. Upload CSV: {upload_link}\n"
-        "2. Ask any question in plain English"
+        "2. Ask any question in plain English",
+        parse_mode="HTML"
     )
 
 
@@ -276,15 +293,16 @@ def handle_query(message):
         upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
         bot.send_message(
             chat_id,
-            f"👋 Hello! I am QueryMind — your AI CSV analyst.\n\n"
+            f"👋 <b>Hello!</b> I am QueryMind — your AI CSV analyst.\n\n"
             f"📂 Upload your CSV:\n{upload_link}\n\n"
             f"Then ask me anything like:\n"
             f"• Show first 5 rows\n"
-            f"• Count total records"
+            f"• Count total records",
+            parse_mode="HTML"
         )
         return
 
-    thinking_msg = bot.send_message(chat_id, "⏳ Thinking...")
+    thinking_msg = bot.send_message(chat_id, "⏳ <i>Thinking...</i>", parse_mode="HTML")
 
     data   = call_hf_query(question)
     result = format_result(data)
@@ -294,7 +312,8 @@ def handle_query(message):
     except Exception:
         pass
 
-    bot.send_message(chat_id, result)
+    # Sending the structural result with HTML parse mode
+    bot.send_message(chat_id, result, parse_mode="HTML")
 
 
 # ─────────────────────────────
@@ -302,10 +321,7 @@ def handle_query(message):
 # ─────────────────────────────
 
 if __name__ == "__main__":
-    # Start the Health + Notification server
     threading.Thread(target=run_health_server, daemon=True).start()
-    
-    # Start the Self-Ping task
     threading.Thread(target=keep_alive, daemon=True).start()
 
     print("✅ render_bot.py started — polling Telegram...")
