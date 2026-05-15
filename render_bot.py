@@ -1,4 +1,5 @@
 import os
+import json # ✅ Added to handle incoming data from Hugging Face
 import time
 import threading
 import requests
@@ -39,14 +40,44 @@ def is_casual(text: str) -> bool:
 
 
 # ─────────────────────────────
-# HEALTH SERVER (for UptimeRobot)
+# HEALTH & NOTIFICATION SERVER
 # ─────────────────────────────
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        """Standard UptimeRobot Health Check"""
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")
+
+    def do_POST(self):
+        """
+        ✅ Added: Catches automated upload triggers from Hugging Face app.py
+        to bypass HF's outbound SSL handshake restrictions.
+        """
+        if self.path == "/notify-upload":
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                payload = json.loads(post_data.decode('utf-8'))
+                chat_id = payload.get("chat_id")
+                text = payload.get("text")
+                
+                if chat_id and text:
+                    # Render sends the actual message using its stable connection
+                    bot.send_message(chat_id, text, parse_mode="HTML")
+                    print(f"🔔 Signal from HF: Notification sent to {chat_id}")
+                
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status": "delivered"}')
+                return
+            except Exception as e:
+                print(f"❌ Proxy Notification Error: {e}")
+                
+        self.send_response(400)
+        self.end_headers()
 
     def log_message(self, *args):
         pass
@@ -55,7 +86,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 def run_health_server():
     port = int(os.getenv("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"✅ Health server running on port {port}")
+    print(f"✅ Health & Notification server running on port {port}")
     server.serve_forever()
 
 
@@ -80,11 +111,11 @@ def keep_alive():
 # HF API CALLS
 # ─────────────────────────────
 
-def call_hf_query(question: str) -> dict:
+def call_hf_query(chat_id: int, question: str) -> dict:
     try:
         resp = requests.post(
             f"{HF_SPACE_URL}/query",
-            json={"session_id": "latest", "question": question},
+            json={"session_id": str(chat_id), "question": question}, # ✅ Updated: Pass actual chat_id for isolation
             timeout=(10, 60)
         )
         return resp.json()
@@ -104,12 +135,9 @@ def call_hf_health() -> dict:
 
 # ─────────────────────────────
 # RESULT FORMATTER
-# Copy-paste friendly plain text table
 # ─────────────────────────────
 
 def format_result(data: dict) -> str:
-
-    # Top-level error (Gemini 429, HF down, no CSV, etc.)
     if "error" in data and not data.get("sql") and not data.get("results"):
         return (
             f"❌ {data['error']}\n\n"
@@ -122,18 +150,15 @@ def format_result(data: dict) -> str:
     sql     = data.get("sql", "")
     results = data.get("results", [])
 
-    # SQL execution error
     if isinstance(results, list) and results and "error" in results[0]:
         return (
             f"❌ SQL Error:\n{results[0]['error']}\n\n"
             f"SQL attempted:\n{sql}"
         )
 
-    # No rows returned
     if not results:
         return f"SQL:\n{sql}\n\nNo records found."
 
-    # ── Copy-paste friendly plain table ──────────────────
     cols   = list(results[0].keys())
     rows   = results[:15]
 
@@ -167,14 +192,14 @@ def format_result(data: dict) -> str:
 
 @bot.message_handler(commands=["start"])
 def welcome(message):
-    chat_id     = message.chat.id
+    chat_id      = message.chat.id
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
         "⚡ Welcome to QueryMind — AI CSV Analyst\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📂 STEP 1 — Upload your CSV here:\n{upload_link}\n\n"
-        "After upload you will get a confirmation here automatically.\n\n"
+        "After upload you will get a confirmation here automatically.\n"
         "💬 STEP 2 — Ask questions in plain English.\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📋 Example questions:\n\n"
@@ -194,7 +219,7 @@ def welcome(message):
 
 @bot.message_handler(commands=["upload"])
 def send_upload_link(message):
-    chat_id     = message.chat.id
+    chat_id      = message.chat.id
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
@@ -225,7 +250,7 @@ def status(message):
 
 @bot.message_handler(commands=["help"])
 def help_cmd(message):
-    chat_id     = message.chat.id
+    chat_id      = message.chat.id
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
@@ -250,7 +275,6 @@ def handle_query(message):
     chat_id  = message.chat.id
     question = message.text.strip()
 
-    # ── Casual message handler ────────────────────────────
     if is_casual(question):
         upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
         bot.send_message(
@@ -266,10 +290,9 @@ def handle_query(message):
         )
         return
 
-    # ── Data query handler ────────────────────────────────
     thinking_msg = bot.send_message(chat_id, "⏳ Thinking...")
 
-    data   = call_hf_query(question)
+    data   = call_hf_query(chat_id, question) # ✅ Updated: Pass real chat_id
     result = format_result(data)
 
     try:
