@@ -70,7 +70,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 text = payload.get("text")
                 
                 if chat_id and text:
-                    # Render sends the actual message using its stable connection
+                    # Forward message from HF to Telegram
                     bot.send_message(chat_id, text, parse_mode="HTML")
                     print(f"🔔 Signal from HF: Notification sent to {chat_id}")
                 
@@ -140,66 +140,59 @@ def call_hf_health() -> dict:
 
 # ─────────────────────────────
 # RESULT FORMATTER
-# Improved Beautiful & Structural Formatting
 # ─────────────────────────────
 
 def format_result(data: dict) -> str:
+    # Error handling
     if "error" in data and not data.get("sql") and not data.get("results"):
+        err_msg = html.escape(data['error'])
         return (
-            f"❌ <b>Error:</b> {html.escape(data['error'])}\n\n"
+            f"❌ <b>Error:</b> {err_msg}\n\n"
             f"Possible reasons:\n"
-            f"• No CSV uploaded yet — visit web app\n"
-            f"• AI rate limit hit — wait 60s\n"
-            f"• HF Space waking up — retry in 30s"
+            f"• No CSV uploaded yet\n"
+            f"• AI rate limit hit\n"
+            f"• HF Space waking up"
         )
 
     sql     = data.get("sql", "")
     results = data.get("results", [])
 
-    # Format the SQL block nicely
-    sql_block = f"🔍 <b>Generated SQL:</b>\n<code>{html.escape(sql)}</code>"
+    # HTML Escape the SQL for safe display
+    safe_sql = html.escape(sql)
+    sql_block = f"🔍 <b>SQL:</b>\n<code>{safe_sql}</code>"
 
+    # SQL Error handling
     if isinstance(results, list) and results and "error" in results[0]:
-        return (
-            f"❌ <b>SQL Execution Error:</b>\n"
-            f"<code>{html.escape(results[0]['error'])}</code>\n\n"
-            f"{sql_block}"
-        )
+        err_sql = html.escape(results[0]['error'])
+        return f"❌ <b>SQL Error:</b>\n<code>{err_sql}</code>\n\n{sql_block}"
 
     if not results:
-        return f"{sql_block}\n\n📭 <b>No records found.</b>"
+        return f"{sql_block}\n\n📭 No records found."
 
-    # ── Structural Table Construction ──────────────────
-    cols = list(results[0].keys())
-    # Limit rows for Telegram display
-    display_rows = results[:10]
+    # ── Table Construction ──────────────────
+    cols   = list(results[0].keys())
+    rows_to_show = results[:10]
 
     # Calculate widths
-    widths = {}
-    for c in cols:
-        val_lens = [len(str(r.get(c, ""))) for r in display_rows]
-        widths[c] = max(len(str(c)), max(val_lens) if val_lens else 0)
+    widths = {c: max(len(str(c)), max([len(str(r.get(c, ""))) for r in rows_to_show] + [0])) for c in cols}
 
-    # Build the ASCII table
-    # Header
-    header = " | ".join(html.escape(str(c)).upper().ljust(widths[c]) for c in cols)
-    # Divider
+    # Header and Divider
+    header  = " | ".join(html.escape(str(c)).upper().ljust(widths[c]) for c in cols)
     divider = "-+-".join("-" * widths[c] for c in cols)
     
     # Body
     body_lines = []
-    for row in display_rows:
+    for row in rows_to_show:
         line = " | ".join(html.escape(str(row.get(c, ""))).ljust(widths[c]) for c in cols)
         body_lines.append(line)
     body = "\n".join(body_lines)
 
-    footer = ""
-    if len(results) > 10:
-        footer = f"\n\n<i>... and {len(results) - 10} more rows.</i>"
+    footer = f"\n\n<i>Showing {len(rows_to_show)} of {len(results)} rows.</i>" if len(results) > 10 else ""
 
+    # Return structured message
     return (
         f"{sql_block}\n\n"
-        f"📊 <b>Results ({len(results)} rows):</b>\n"
+        f"📊 <b>Results:</b>\n"
         f"<pre>{header}\n{divider}\n{body}</pre>{footer}"
     )
 
@@ -214,20 +207,10 @@ def welcome(message):
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
-        "⚡ <b>Welcome to QueryMind — AI CSV Analyst</b>\n"
+        "⚡ <b>Welcome to QueryMind</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📂 <b>STEP 1</b> — Upload your CSV here:\n{upload_link}\n\n"
-        "After upload you will get a confirmation here automatically.\n\n"
-        "💬 <b>STEP 2</b> — Ask questions in plain English.\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📋 <b>Example questions:</b>\n\n"
-        "• Show first 5 rows\n"
-        "• Count total records\n"
-        "• Average of column_name\n\n"
-        "<b>Commands:</b>\n"
-        "/upload — get upload link\n"
-        "/status — check API health\n"
-        "/help   — all commands",
+        f"📂 <b>STEP 1</b> — Upload CSV:\n{upload_link}\n\n"
+        "💬 <b>STEP 2</b> — Ask questions in English.",
         parse_mode="HTML"
     )
 
@@ -236,52 +219,22 @@ def welcome(message):
 def send_upload_link(message):
     chat_id      = message.chat.id
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
-    bot.send_message(
-        chat_id,
-        f"📂 <b>Upload your CSV here:</b>\n{upload_link}\n\n"
-        f"After upload, you will receive a confirmation here automatically.",
-        parse_mode="HTML"
-    )
+    bot.send_message(chat_id, f"📂 <b>Upload CSV:</b>\n{upload_link}", parse_mode="HTML")
 
 
 @bot.message_handler(commands=["status"])
 def status(message):
-    bot.send_message(message.chat.id, "🔍 Checking HF API status...")
+    bot.send_message(message.chat.id, "🔍 Checking status...")
     data = call_hf_health()
-
     if "error" in data:
-        bot.send_message(
-            message.chat.id,
-            f"❌ <b>HF API unreachable</b>\n\nError: <code>{html.escape(data['error'])}</code>",
-            parse_mode="HTML"
-        )
+        bot.send_message(message.chat.id, "❌ HF API Offline")
     else:
-        bot.send_message(
-            message.chat.id,
-            f"✅ <b>HF API: online</b>\n"
-            f"🤖 Model: {data.get('model', 'unknown')}\n"
-            f"🔧 Service: {data.get('service', 'unknown')}",
-            parse_mode="HTML"
-        )
+        bot.send_message(message.chat.id, "✅ HF API Online", parse_mode="HTML")
 
 
 @bot.message_handler(commands=["help"])
 def help_cmd(message):
-    chat_id      = message.chat.id
-    upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
-    bot.send_message(
-        chat_id,
-        "🆘 <b>Help — QueryMind Bot</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "/start  — Welcome message\n"
-        "/upload — Get your CSV upload link\n"
-        "/status — Check if HF API is online\n"
-        "/help   — This message\n\n"
-        "<b>How to use:</b>\n"
-        f"1. Upload CSV: {upload_link}\n"
-        "2. Ask any question in plain English",
-        parse_mode="HTML"
-    )
+    bot.send_message(message.chat.id, "/start, /upload, /status, /help")
 
 
 @bot.message_handler(func=lambda m: True)
@@ -290,16 +243,7 @@ def handle_query(message):
     question = message.text.strip()
 
     if is_casual(question):
-        upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
-        bot.send_message(
-            chat_id,
-            f"👋 <b>Hello!</b> I am QueryMind — your AI CSV analyst.\n\n"
-            f"📂 Upload your CSV:\n{upload_link}\n\n"
-            f"Then ask me anything like:\n"
-            f"• Show first 5 rows\n"
-            f"• Count total records",
-            parse_mode="HTML"
-        )
+        bot.send_message(chat_id, "👋 Hello! Please upload a CSV to begin.")
         return
 
     thinking_msg = bot.send_message(chat_id, "⏳ <i>Thinking...</i>", parse_mode="HTML")
@@ -309,10 +253,9 @@ def handle_query(message):
 
     try:
         bot.delete_message(chat_id, thinking_msg.message_id)
-    except Exception:
+    except:
         pass
 
-    # Sending the structural result with HTML parse mode
     bot.send_message(chat_id, result, parse_mode="HTML")
 
 
@@ -324,11 +267,5 @@ if __name__ == "__main__":
     threading.Thread(target=run_health_server, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
 
-    print("✅ render_bot.py started — polling Telegram...")
-    print(f"🌐 HF Space: {HF_SPACE_URL}")
-
-    bot.infinity_polling(
-        timeout=60,
-        long_polling_timeout=30,
-        allowed_updates=["message"]
-    )
+    print("✅ render_bot.py started...")
+    bot.infinity_polling(timeout=60, allowed_updates=["message"])
