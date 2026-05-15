@@ -40,10 +40,10 @@ def is_casual(text: str) -> bool:
 
 
 # ─────────────────────────────
-# NOTIFICATION & HEALTH SERVER
+# HEALTH & NOTIFICATION SERVER
 # ─────────────────────────────
 
-class HealthAndNotificationHandler(BaseHTTPRequestHandler):
+class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         """Standard UptimeRobot Health Check"""
         if self.path == "/":
@@ -56,8 +56,8 @@ class HealthAndNotificationHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """
-        Catches notification triggers from Hugging Face.
-        This bypasses the HF SSL Handshake timeout issue.
+        Receives notifications from Hugging Face app.py
+        to bypass HF's outbound SSL handshake restrictions.
         """
         if self.path == "/notify-upload":
             content_length = int(self.headers['Content-Length'])
@@ -69,7 +69,7 @@ class HealthAndNotificationHandler(BaseHTTPRequestHandler):
                 text = payload.get("text")
                 
                 if chat_id and text:
-                    # Send the message to Telegram from Render (Stable Connection)
+                    # Render handles the Telegram connection perfectly
                     bot.send_message(chat_id, text, parse_mode="HTML")
                     print(f"🔔 Notification forwarded to Chat ID: {chat_id}")
                 
@@ -78,25 +78,24 @@ class HealthAndNotificationHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"status": "delivered"}')
                 return
             except Exception as e:
-                print(f"❌ Notification relay failed: {e}")
+                print(f"❌ Error processing notification: {e}")
                 
         self.send_response(400)
         self.end_headers()
 
     def log_message(self, *args):
-        pass # Suppress standard GET logs
+        pass  # suppress noisy logs
 
 
 def run_health_server():
     port = int(os.getenv("PORT", 8080))
-    # Use the new Handler that supports POST
-    server = HTTPServer(("0.0.0.0", port), HealthAndNotificationHandler)
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
     print(f"✅ Health & Notification server running on port {port}")
     server.serve_forever()
 
 
 # ─────────────────────────────
-# SELF-PING (Keep-alive)
+# SELF-PING (backup keep-alive)
 # ─────────────────────────────
 
 def keep_alive():
@@ -143,86 +142,171 @@ def call_hf_health() -> dict:
 # ─────────────────────────────
 
 def format_result(data: dict) -> str:
-    if "error" in data and not data.get("sql"):
+    if "error" in data and not data.get("sql") and not data.get("results"):
         return (
             f"❌ {data['error']}\n\n"
             f"Possible reasons:\n"
-            f"• No CSV uploaded yet\n"
-            f"• AI rate limit hit\n"
-            f"• HF Space is waking up"
+            f"• No CSV uploaded yet — send /upload for the link\n"
+            f"• AI rate limit hit — wait 60s and retry\n"
+            f"• HF Space is waking up — retry in 30s"
         )
 
     sql     = data.get("sql", "")
     results = data.get("results", [])
 
     if isinstance(results, list) and results and "error" in results[0]:
-        return f"❌ SQL Error:\n{results[0]['error']}\n\nSQL tried:\n{sql}"
+        return (
+            f"❌ SQL Error:\n{results[0]['error']}\n\n"
+            f"SQL attempted:\n{sql}"
+        )
 
     if not results:
         return f"SQL:\n{sql}\n\nNo records found."
 
-    # Format as a clean text table
     cols   = list(results[0].keys())
     rows   = results[:15]
-    widths = {c: max(len(str(c)), max(len(str(r.get(c, ""))) for r in rows)) for c in cols}
+
+    widths = {
+        c: max(len(str(c)), max(len(str(r.get(c, ""))) for r in rows))
+        for c in cols
+    }
 
     header  = " | ".join(str(c).ljust(widths[c]) for c in cols)
     divider = "-+-".join("-" * widths[c] for c in cols)
-    body    = "\n".join(" | ".join(str(row.get(c, "")).ljust(widths[c]) for c in cols) for row in rows)
+    body    = "\n".join(
+        " | ".join(str(row.get(c, "")).ljust(widths[c]) for c in cols)
+        for row in rows
+    )
 
-    extra = f"\n... and {len(results)-15} more rows." if len(results) > 15 else ""
+    extra = (
+        f"\n... and {len(results) - 15} more rows."
+        if len(results) > 15 else ""
+    )
 
-    return f"SQL:\n<code>{sql}</code>\n\nResults ({len(results)} rows):\n<pre>{header}\n{divider}\n{body}{extra}</pre>"
+    return (
+        f"SQL:\n{sql}\n\n"
+        f"Results ({len(results)} rows):\n\n"
+        f"{header}\n{divider}\n{body}{extra}"
+    )
 
 
 # ─────────────────────────────
 # TELEGRAM HANDLERS
 # ─────────────────────────────
 
-@bot.message_handler(commands=["start", "upload"])
+@bot.message_handler(commands=["start"])
 def welcome(message):
-    chat_id     = message.chat.id
+    chat_id      = message.chat.id
     upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
     bot.send_message(
         chat_id,
-        "📂 <b>Upload your CSV here:</b>\n"
-        f"{upload_link}\n\n"
-        "<i>Confirmation will be sent here automatically after upload.</i>",
-        parse_mode="HTML"
+        "⚡ Welcome to QueryMind — AI CSV Analyst\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📂 STEP 1 — Upload your CSV here:\n{upload_link}\n\n"
+        "After upload you will get a confirmation here automatically.\n\n"
+        "💬 STEP 2 — Ask questions in plain English.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📋 Example questions:\n\n"
+        "• Show first 5 rows\n"
+        "• Count total records\n"
+        "• Show unique values in column_name\n"
+        "• Group by column_name and count\n\n"
+        "Commands:\n"
+        "/upload — get upload link\n"
+        "/status — check API health\n"
+        "/help   — all commands"
     )
+
+
+@bot.message_handler(commands=["upload"])
+def send_upload_link(message):
+    chat_id      = message.chat.id
+    upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
+    bot.send_message(
+        chat_id,
+        f"📂 Upload your CSV here:\n{upload_link}\n\n"
+        f"After upload, you will receive a confirmation here automatically."
+    )
+
 
 @bot.message_handler(commands=["status"])
 def status(message):
+    bot.send_message(message.chat.id, "🔍 Checking HF API status...")
     data = call_hf_health()
+
     if "error" in data:
-        bot.send_message(message.chat.id, f"❌ HF API Offline: {data['error']}")
+        bot.send_message(
+            message.chat.id,
+            f"❌ HF API unreachable\n\nError: {data['error']}"
+        )
     else:
-        bot.send_message(message.chat.id, f"✅ HF API Online ({data.get('model')})")
+        bot.send_message(
+            message.chat.id,
+            f"✅ HF API: online\n"
+            f"🤖 Model: {data.get('model', 'unknown')}\n"
+            f"🔧 Service: {data.get('service', 'unknown')}"
+        )
+
+
+@bot.message_handler(commands=["help"])
+def help_cmd(message):
+    chat_id      = message.chat.id
+    upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
+    bot.send_message(
+        chat_id,
+        "🆘 Help — QueryMind Bot\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "/start  — Welcome message\n"
+        "/upload — Get your CSV upload link\n"
+        "/status — Check if HF API is online\n"
+        "/help   — This message\n\n"
+        "How to use:\n"
+        f"1. Upload CSV: {upload_link}\n"
+        "2. Ask any question in plain English"
+    )
+
 
 @bot.message_handler(func=lambda m: True)
 def handle_query(message):
-    chat_id = message.chat.id
+    chat_id  = message.chat.id
     question = message.text.strip()
 
     if is_casual(question):
-        welcome(message)
+        upload_link = f"{HF_SPACE_URL}?chat_id={chat_id}"
+        bot.send_message(
+            chat_id,
+            f"👋 Hello! I am QueryMind — your AI CSV analyst.\n\n"
+            f"📂 Upload your CSV:\n{upload_link}\n\n"
+            f"Then ask me anything!"
+        )
         return
 
-    thinking = bot.send_message(chat_id, "⏳ Thinking...")
-    data = call_hf_query(question)
+    thinking_msg = bot.send_message(chat_id, "⏳ Thinking...")
+
+    data   = call_hf_query(question)
     result = format_result(data)
 
     try:
-        bot.delete_message(chat_id, thinking.message_id)
-    except:
+        bot.delete_message(chat_id, thinking_msg.message_id)
+    except Exception:
         pass
-    
-    bot.send_message(chat_id, result, parse_mode="HTML")
 
+    bot.send_message(chat_id, result)
+
+
+# ─────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────
 
 if __name__ == "__main__":
     threading.Thread(target=run_health_server, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
 
-    print("✅ render_bot.py active and listening for notifications...")
-    bot.infinity_polling(timeout=60)
+    print("✅ render_bot.py started — polling Telegram...")
+    print(f"🌐 HF Space: {HF_SPACE_URL}")
+
+    bot.infinity_polling(
+        timeout=60,
+        long_polling_timeout=30,
+        allowed_updates=["message"]
+    )
